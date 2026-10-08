@@ -6,232 +6,197 @@
  You may obtain a copy of the License at
 
       https://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
 -->
 <!doctype html>
 <html lang="pl">
-  <head>
-    <meta charset="UTF-8" />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap"
-      rel="stylesheet"
-    />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  </head>
-  <body>
-    <div id="qrcode-container" style="display: none"></div>
-    <canvas id="card-canvas" style="display: none"></canvas>
-    <script>
-      window["ai_edge_gallery_get_result"] = async function (data, secret) {
-        console.log("[learn-something-new-pl] Start skryptu:", data);
-        try {
-          if (document.fonts && document.fonts.ready) {
-            await document.fonts.ready;
-          }
+<head>
+  <meta charset="UTF-8" />
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+  <div id="qrcode-container" style="display:none"></div>
+  <canvas id="card-canvas" style="display:none"></canvas>
 
-          let params = {};
-          if (typeof data === "object" && data !== null) {
-            params = data;
-          } else if (typeof data === "string") {
-            const cleanData = data.trim();
-            try {
-              params = JSON.parse(cleanData);
-            } catch (e) {
-              try {
-                params = JSON.parse(cleanData + "}");
-              } catch (e2) {
-                try {
-                  params = JSON.parse(cleanData + '"}');
-                } catch (e3) {
-                  const topicMatch = cleanData.match(/"topic"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)/i);
-                  const descMatch = cleanData.match(
-                    /"description"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)/i,
-                  );
-                  params.topic = topicMatch ? topicMatch[1].replace(/\\"/g, '"') : "Niepełne dane";
-                  params.description = descMatch
-                    ? descMatch[1].replace(/\\"/g, '"')
-                    : "Nie udało się odczytać pełnego opisu.";
-                }
-              }
-            }
-          }
+<script>
+window["ai_edge_gallery_get_result"] = async function(data) {
+  try {
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
 
-          const topic = params.topic || "Nieznany temat";
-          const description = params.description || "";
+    let params = {};
+    try {
+      params = typeof data === "string" ? JSON.parse(data) : (data || {});
+    } catch (_) {}
 
-          const canvas = document.getElementById("card-canvas");
-          const ctx = canvas.getContext("2d");
+    const requestedTopic = (params.topic || "").trim();
+    if (!requestedTopic) throw new Error("Brak tematu.");
 
-          canvas.width = 1080;
-          canvas.height = 1080;
+    // Jedno wywołanie: wyszukaj temat bezpośrednio w polskiej Wikipedii.
+    const baseUrl = "https://pl.wikipedia.org/w/api.php";
+    const searchParams = new URLSearchParams({
+      action: "query",
+      format: "json",
+      generator: "search",
+      gsrsearch: requestedTopic,
+      gsrlimit: "1",
+      prop: "extracts",
+      explaintext: "1",
+      exintro: "1",
+      origin: "*"
+    });
 
-          const gradient = ctx.createLinearGradient(0, 0, 1080, 1080);
-          gradient.addColorStop(0, "#FF9A9E");
-          gradient.addColorStop(0.5, "#FECFEF");
-          gradient.addColorStop(1, "#A1C4FD");
-          ctx.fillStyle = gradient;
-          ctx.fillRect(0, 0, 1080, 1080);
+    const res = await fetch(`${baseUrl}?${searchParams.toString()}`);
+    if (!res.ok) throw new Error(`Wikipedia HTTP ${res.status}`);
+    const json = await res.json();
 
-          ctx.shadowColor = "rgba(0, 0, 0, 0.15)";
-          ctx.shadowBlur = 40;
-          ctx.shadowOffsetY = 20;
-          ctx.fillStyle = "#FFFFFF";
+    if (!json.query || !json.query.pages) {
+      return JSON.stringify({
+        result: JSON.stringify({status:"not_found", message:"Nie znaleziono tematu w polskiej Wikipedii."}),
+        image: null,
+        error: null
+      });
+    }
 
-          const x = 60, y = 60, w = 960, h = 960, r = 40;
-          ctx.beginPath();
-          ctx.moveTo(x + r, y);
-          ctx.arcTo(x + w, y, x + w, y + h, r);
-          ctx.arcTo(x + w, y + h, x, y + h, r);
-          ctx.arcTo(x, y + h, x, y, r);
-          ctx.arcTo(x, y, x + w, y, r);
-          ctx.closePath();
-          ctx.fill();
-          ctx.shadowColor = "transparent";
+    const pages = json.query.pages;
+    const page = pages[Object.keys(pages)[0]];
+    const topic = page.title || requestedTopic;
+    const extract = (page.extract || "").replace(/\s+/g, " ").trim();
 
-          ctx.fillStyle = "#FF6B6B";
-          ctx.font = 'bold 32px "Google Sans", sans-serif';
-          ctx.fillText("💡 DZIŚ POZNAJĘ", 120, 150);
+    // Deterministyczne streszczenie bez drugiego wywołania modelu:
+    // bierzemy maksymalnie pierwsze dwa zdania z leadu Wikipedii.
+    const sentences = extract.match(/[^.!?]+[.!?]+/g) || [extract];
+    let description = sentences.slice(0, 2).join(" ").trim();
+    if (description.length > 320) {
+      let cut = description.lastIndexOf(" ", 317);
+      if (cut < 180) cut = 317;
+      description = description.slice(0, cut).trim() + "...";
+    }
+    if (!description) description = "Brak krótkiego opisu w polskiej Wikipedii.";
 
-          ctx.fillStyle = "#2D3436";
-          ctx.font = 'bold 72px "Google Sans", sans-serif';
-          const topicY = 250;
-          const nextYAfterTopic = wrapText(ctx, topic, 120, topicY, 840, 85);
+    const canvas = document.getElementById("card-canvas");
+    const ctx = canvas.getContext("2d");
+    canvas.width = 1080;
+    canvas.height = 1080;
 
-          let clampedDescription = description;
-          if (clampedDescription.length > 320) {
-            let cutIndex = -1;
-            for (let i = 319; i >= 0; i--) {
-              if (
-                clampedDescription[i] === "." ||
-                clampedDescription[i] === "!" ||
-                clampedDescription[i] === "?"
-              ) {
-                cutIndex = i + 1;
-                break;
-              }
-            }
-            if (cutIndex > 0) {
-              clampedDescription = clampedDescription.substring(0, cutIndex).trim();
-            } else {
-              clampedDescription = clampedDescription.substring(0, 317) + "...";
-            }
-          }
+    const gradient = ctx.createLinearGradient(0,0,1080,1080);
+    gradient.addColorStop(0,"#FF9A9E");
+    gradient.addColorStop(0.5,"#FECFEF");
+    gradient.addColorStop(1,"#A1C4FD");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0,0,1080,1080);
 
-          ctx.fillStyle = "#636E72";
-          ctx.font = '42px "Google Sans", sans-serif';
-          wrapText(ctx, clampedDescription, 120, nextYAfterTopic + 90, 840, 60);
+    ctx.shadowColor = "rgba(0,0,0,0.15)";
+    ctx.shadowBlur = 40;
+    ctx.shadowOffsetY = 20;
+    ctx.fillStyle = "#FFFFFF";
 
-          function getPlatform() {
-            const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-            if (/iPad|iPhone|iPod/.test(userAgent) && !window.MSStream) return "iOS";
-            if (/android/i.test(userAgent)) return "Android";
-            return "unknown";
-          }
+    const x=60,y=60,w=960,h=960,r=40;
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowColor = "transparent";
 
-          const platform = getPlatform();
-          let linkUrl = "https://github.com/google-ai-edge/gallery";
-          if (platform === "iOS") {
-            linkUrl = "https://apps.apple.com/us/app/google-ai-edge-gallery/id6749645337";
-          } else if (platform === "Android") {
-            linkUrl = "https://play.google.com/store/apps/details?id=com.google.ai.edge.gallery";
-          }
+    ctx.fillStyle = "#FF6B6B";
+    ctx.font = 'bold 32px "Google Sans", sans-serif';
+    ctx.fillText("💡 DZIŚ SIĘ DOWIEDZIAŁEM",120,150);
 
-          const container = document.getElementById("qrcode-container");
-          container.innerHTML = "";
-          try {
-            new QRCode(container, {
-              text: linkUrl,
-              width: 140,
-              height: 140,
-              colorDark: "#2D3436",
-              colorLight: "#ffffff",
-              correctLevel: QRCode.CorrectLevel.L,
-            });
-          } catch (qrInitErr) {
-            console.error("[learn-something-new-pl] Błąd generowania QR:", qrInitErr);
-          }
+    ctx.fillStyle = "#2D3436";
+    ctx.font = 'bold 72px "Google Sans", sans-serif';
+    const nextY = wrapText(ctx, topic, 120, 250, 840, 85);
 
-          const qrCanvas = await new Promise((resolve) => {
-            let attempts = 0;
-            const check = setInterval(() => {
-              const canvas = container.querySelector("canvas");
-              if (canvas) {
-                clearInterval(check);
-                resolve(canvas);
-              }
-              if (attempts++ > 20) {
-                clearInterval(check);
-                console.warn("[learn-something-new-pl] QR nie został wygenerowany.");
-                resolve(null);
-              }
-            }, 50);
-          });
+    ctx.fillStyle = "#636E72";
+    ctx.font = '42px "Google Sans", sans-serif';
+    wrapText(ctx, description, 120, nextY + 90, 840, 60);
 
-          const footerY = 920;
-          if (qrCanvas) {
-            ctx.drawImage(qrCanvas, 830, 820, 140, 140);
-          }
+    function getPlatform() {
+      const ua = navigator.userAgent || navigator.vendor || window.opera;
+      if (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) return "iOS";
+      if (/android/i.test(ua)) return "Android";
+      return "unknown";
+    }
 
-          const logoImg = new Image();
-          logoImg.src = "../assets/galleryLogo.svg";
+    let linkUrl = "https://github.com/google-ai-edge/gallery";
+    const platform = getPlatform();
+    if (platform === "iOS") linkUrl = "https://apps.apple.com/us/app/google-ai-edge-gallery/id6749645337";
+    if (platform === "Android") linkUrl = "https://play.google.com/store/apps/details?id=com.google.ai.edge.gallery";
 
-          await new Promise((resolve) => {
-            logoImg.onload = () => {
-              ctx.drawImage(logoImg, 115, footerY - 30, 70, 70);
-              resolve();
-            };
-            logoImg.onerror = () => resolve();
-          });
+    const container = document.getElementById("qrcode-container");
+    container.innerHTML = "";
+    try {
+      new QRCode(container, {
+        text: linkUrl,
+        width: 140,
+        height: 140,
+        colorDark: "#2D3436",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.L
+      });
+    } catch (_) {}
 
-          ctx.fillStyle = "#2D3436";
-          ctx.font = 'bold 36px "Google Sans", sans-serif';
-          ctx.fillText("Google AI Edge Gallery", 200, footerY);
-          ctx.fillStyle = "#B2BEC3";
-          ctx.font = '28px "Google Sans", sans-serif';
-          ctx.fillText("Zeskanuj, aby pobrać aplikację", 200, footerY + 40);
+    const qrCanvas = await new Promise(resolve => {
+      let tries = 0;
+      const t = setInterval(() => {
+        const c = container.querySelector("canvas");
+        if (c) { clearInterval(t); resolve(c); }
+        if (tries++ > 20) { clearInterval(t); resolve(null); }
+      }, 50);
+    });
 
-          const finalBase64 = canvas.toDataURL("image/jpeg", 0.9);
+    const footerY = 920;
+    if (qrCanvas) ctx.drawImage(qrCanvas,830,820,140,140);
 
-          return JSON.stringify({
-            result: JSON.stringify({
-              status: "success",
-              message: "Karta została wygenerowana.",
-            }),
-            image: { base64: finalBase64 },
-            error: null,
-          });
-        } catch (err) {
-          return JSON.stringify({ result: null, image: null, error: err.message });
-        }
-      };
+    const logoImg = new Image();
+    logoImg.src = "../assets/galleryLogo.svg";
+    await new Promise(resolve => {
+      logoImg.onload = () => { ctx.drawImage(logoImg,115,footerY-30,70,70); resolve(); };
+      logoImg.onerror = () => resolve();
+    });
 
-      function wrapText(context, text, x, y, maxWidth, lineHeight) {
-        const words = text.split(" ");
-        let line = "";
-        let currentY = y;
+    ctx.fillStyle = "#2D3436";
+    ctx.font = 'bold 36px "Google Sans", sans-serif';
+    ctx.fillText("Google AI Edge Gallery",200,footerY);
+    ctx.fillStyle = "#B2BEC3";
+    ctx.font = '28px "Google Sans", sans-serif';
+    ctx.fillText("Zeskanuj, aby pobrać aplikację",200,footerY+40);
 
-        for (let n = 0; n < words.length; n++) {
-          const testLine = line + words[n] + " ";
-          const metrics = context.measureText(testLine);
-          const testWidth = metrics.width;
+    const finalBase64 = canvas.toDataURL("image/jpeg",0.9);
 
-          if (testWidth > maxWidth && n > 0) {
-            context.fillText(line, x, currentY);
-            line = words[n] + " ";
-            currentY += lineHeight;
-          } else {
-            line = testLine;
-          }
-        }
+    return JSON.stringify({
+      result: JSON.stringify({
+        status:"success",
+        topic,
+        message:"Karta została wygenerowana."
+      }),
+      image:{base64:finalBase64},
+      error:null
+    });
+  } catch (err) {
+    return JSON.stringify({result:null,image:null,error:err.message});
+  }
+};
 
-        context.fillText(line, x, currentY);
-        return currentY;
-      }
-    </script>
-  </body>
+function wrapText(context,text,x,y,maxWidth,lineHeight) {
+  const words=(text || "").split(" ");
+  let line="";
+  let currentY=y;
+  for (let n=0;n<words.length;n++) {
+    const testLine=line+words[n]+" ";
+    if (context.measureText(testLine).width>maxWidth && n>0) {
+      context.fillText(line,x,currentY);
+      line=words[n]+" ";
+      currentY+=lineHeight;
+    } else {
+      line=testLine;
+    }
+  }
+  context.fillText(line,x,currentY);
+  return currentY;
+}
+</script>
+</body>
 </html>
